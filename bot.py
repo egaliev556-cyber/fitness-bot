@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import math
+import os
 from datetime import date
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -162,59 +164,36 @@ async def process_hip(message: Message, state: FSMContext):
         await message.answer("❌ Введи число")
 
 async def calculate_fat_percent(message: Message, state: FSMContext, data):
-    # Бля, простая и понятная формула на основе ИМТ и обхватов
+    # Переводим см в дюймы
+    height_in = data['height'] / 2.54
+    neck_in = data['neck'] / 2.54
+    waist_in = data['waist'] / 2.54
     
-    height_m = data['height'] / 100  # рост в метрах
-    
-    # Определяем примерный вес по обхватам (приблизительно)
-    # Для мужчин: вес ≈ (талия * рост) / 240 (примерная формула)
+    # Базовый расчет
     if data['gender'] == "Мужской":
-        # Оценка веса по талии и шее
-        estimated_weight = (data['waist'] * data['height']) / 220
-        
-        # Базовый процент жира
-        if data['waist'] < 70:
-            base_fat = 10
-        elif data['waist'] < 80:
-            base_fat = 15
-        elif data['waist'] < 90:
-            base_fat = 20
-        elif data['waist'] < 100:
-            base_fat = 25
-        elif data['waist'] < 110:
-            base_fat = 30
-        else:
-            base_fat = 35
-        
-        # Корректировка по шее (чем толще шея, тем больше мышц)
-        neck_correction = max(0, (data['neck'] - 40) / 10) * 2
-        fat_percent = base_fat - neck_correction
-        
-        # Ограничения
-        fat_percent = max(10, min(40, round(fat_percent, 1)))
-        
-        # Для твоего примера (рост180, шея45, талия78):
-        # base_fat = 20 (талия 78)
-        # neck_correction = (45-40)/10*2 = 1
-        # fat_percent = 20 - 1 = 19% ✅ РЕАЛИСТИЧНО!
-        
-    else:  # Женский
-        if data['waist'] < 60:
-            base_fat = 18
-        elif data['waist'] < 70:
-            base_fat = 22
-        elif data['waist'] < 80:
-            base_fat = 27
-        elif data['waist'] < 90:
-            base_fat = 32
-        elif data['waist'] < 100:
-            base_fat = 37
-        else:
-            base_fat = 42
-        
-        neck_correction = max(0, (data['neck'] - 35) / 10) * 1.5
-        fat_percent = base_fat - neck_correction
-        fat_percent = max(18, min(50, round(fat_percent, 1)))
+        if waist_in - neck_in <= 0:
+            await message.answer("⚠️ Ошибка! Талия должна быть больше шеи.")
+            await state.clear()
+            return
+        fat_percent = 86.010 * math.log10(waist_in - neck_in) - 70.041 * math.log10(height_in) + 36.76
+    else:
+        hip_in = data.get('hip', 0) / 2.54
+        if waist_in + hip_in - neck_in <= 0:
+            await message.answer("⚠️ Ошибка! Проверь правильность замеров.")
+            await state.clear()
+            return
+        fat_percent = 163.205 * math.log10(waist_in + hip_in - neck_in) - 97.684 * math.log10(height_in) - 78.387
+    
+    # Реалистичные корректировки
+    if data['gender'] == "Мужской":
+        waist_to_height = data['waist'] / data['height']
+        if waist_to_height < 0.38:
+            fat_percent = min(fat_percent, 12)
+        elif waist_to_height < 0.42:
+            fat_percent = min(fat_percent, 15)
+        fat_percent = max(8, min(35, round(fat_percent, 1)))
+    else:
+        fat_percent = max(14, min(45, round(fat_percent, 1)))
     
     # Сохраняем результат
     save_measurement(message.from_user.id, data['neck'], data['waist'], data.get('hip', 0), fat_percent)
@@ -223,11 +202,12 @@ async def calculate_fat_percent(message: Message, state: FSMContext, data):
     await message.answer(
         f"📊 *Результат:*\n\n"
         f"Процент жира: *{fat_percent}%*\n\n"
-        f"_Формула на основе антропометрических данных_",
+        f"_Формула US Navy_",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
     await state.clear()
+
 
 # ========== ДОБАВЛЕНИЕ ЕДЫ ==========
 @dp.message(F.text == "🥗 Добавить еду")
@@ -636,8 +616,31 @@ async def add_food_manual(message: Message):
         await message.answer(f"❌ Ошибка: {str(e)}")
 
 
+# ========== ВЕБ-СЕРВЕР ДЛЯ RENDER (KEEP-ALIVE) ==========
+async def handle_health(request):
+    """Простой ответ, чтобы Render думал, что это веб-сервер"""
+    return web.Response(text="🤖 Bot is running!")
+
+async def start_web_server():
+    """Запускаем фейковый веб-сервер на порту Render"""
+    app = web.Application()
+    app.router.add_get('/', handle_health)
+    app.router.add_get('/health', handle_health)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"✅ Веб-сервер запущен на порту {port}")
+
+
 # ========== ЗАПУСК ==========
 async def main():
+    # Запускаем веб-сервер в фоне для Render
+    asyncio.create_task(start_web_server())
+    
+    # Основной запуск бота
     await bot.delete_webhook(drop_pending_updates=True)
     init_db()
     print("🤖 Бот запущен!")
