@@ -3,7 +3,6 @@ import logging
 import math
 import os
 from datetime import date
-from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -616,30 +615,8 @@ async def add_food_manual(message: Message):
         await message.answer(f"❌ Ошибка: {str(e)}")
 
 
-# ========== ВЕБ-СЕРВЕР ДЛЯ RENDER (KEEP-ALIVE) ==========
-async def handle_health(request):
-    """Простой ответ, чтобы Render думал, что это веб-сервер"""
-    return web.Response(text="🤖 Bot is running!")
-
-async def start_web_server():
-    """Запускаем фейковый веб-сервер на порту Render"""
-    app = web.Application()
-    app.router.add_get('/', handle_health)
-    app.router.add_get('/health', handle_health)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    print(f"✅ Веб-сервер запущен на порту {port}")
-
-
 # ========== ЗАПУСК ==========
 async def main():
-    # Запускаем веб-сервер в фоне для Render
-    asyncio.create_task(start_web_server())
-    
     # Основной запуск бота
     await bot.delete_webhook(drop_pending_updates=True)
     init_db()
@@ -648,3 +625,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
